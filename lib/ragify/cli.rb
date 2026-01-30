@@ -336,6 +336,8 @@ module Ragify
     method_option :type, type: :string, aliases: "-t", desc: "Filter by type (method, class, module, constant)"
     method_option :path, type: :string, aliases: "-p", desc: "Filter by file path pattern"
     method_option :min_score, type: :numeric, aliases: "-m", desc: "Minimum similarity score (0.0-1.0)"
+    method_option :vector_weight, type: :numeric, aliases: "-w", default: 0.7,
+                                  desc: "Vector weight for hybrid search (0.0-1.0, default: 0.7)"
     method_option :format, type: :string, aliases: "-f", default: "colorized",
                            desc: "Output format (colorized, plain, json)"
     method_option :semantic, type: :boolean, desc: "Use semantic search only (requires Ollama)"
@@ -359,6 +361,12 @@ module Ragify
       # Validate min_score
       if options[:min_score] && (options[:min_score] < 0.0 || options[:min_score] > 1.0)
         puts pastel.red("Error: --min-score must be between 0.0 and 1.0")
+        exit 1
+      end
+
+      # Validate vector_weight
+      if options[:vector_weight] && (options[:vector_weight] < 0.0 || options[:vector_weight] > 1.0)
+        puts pastel.red("Error: --vector-weight must be between 0.0 and 1.0")
         exit 1
       end
 
@@ -415,7 +423,9 @@ module Ragify
       # Show search info
       mode_label = { hybrid: "hybrid (semantic + text)", semantic: "semantic", text: "text" }[mode]
       puts pastel.cyan("Searching: \"#{query}\"")
-      puts pastel.dim("Mode: #{mode_label} | Limit: #{options[:limit]}")
+      mode_info = "Mode: #{mode_label} | Limit: #{options[:limit]}"
+      mode_info += " | Vector weight: #{options[:vector_weight]}" if mode == :hybrid
+      puts pastel.dim(mode_info)
 
       filters = []
       filters << "type=#{options[:type]}" if options[:type]
@@ -432,7 +442,8 @@ module Ragify
           type: options[:type],
           path_filter: options[:path],
           min_score: options[:min_score],
-          mode: mode
+          mode: mode,
+          vector_weight: options[:vector_weight]
         )
 
         if results.empty?

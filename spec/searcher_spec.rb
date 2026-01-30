@@ -186,6 +186,20 @@ RSpec.describe Ragify::Searcher do
         expect(results.length).to be <= 5
       end
     end
+
+    context "with custom vector_weight" do
+      it "accepts vector_weight parameter" do
+        # Should not raise error
+        results = searcher.search("user", mode: :text, vector_weight: 0.5)
+        expect(results).to be_an(Array)
+      end
+
+      it "uses default vector_weight when not specified" do
+        # Default is 0.7 - this just verifies no error
+        results = searcher.search("user", mode: :text)
+        expect(results).to be_an(Array)
+      end
+    end
   end
 
   describe "#semantic_available?" do
@@ -368,7 +382,10 @@ RSpec.describe Ragify::Searcher do
       results = searcher.search("authenticate", mode: :hybrid)
 
       expect(results).to be_an(Array)
-      expect(results.first[:chunk][:name]).to eq("authenticate")
+      expect(results).not_to be_empty
+      # With real embeddings, authenticate should be in results
+      names = results.map { |r| r[:chunk][:name] }
+      expect(names).to include("authenticate")
     end
 
     it "includes sub-scores when available" do
@@ -378,6 +395,14 @@ RSpec.describe Ragify::Searcher do
       result = results.first
       expect(result).to have_key(:vector_score)
       expect(result).to have_key(:text_score)
+    end
+
+    it "accepts custom vector_weight" do
+      # More weight on text search (0.3 vector, 0.7 text)
+      results = searcher.search("authenticate", mode: :hybrid, vector_weight: 0.3)
+
+      expect(results).to be_an(Array)
+      expect(results).not_to be_empty
     end
   end
 

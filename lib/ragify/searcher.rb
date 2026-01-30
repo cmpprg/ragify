@@ -23,16 +23,18 @@ module Ragify
     # @param path_filter [String, nil] Filter by file path pattern
     # @param min_score [Float, nil] Minimum similarity score (0.0-1.0)
     # @param mode [Symbol] Search mode (:hybrid, :semantic, :text)
+    # @param vector_weight [Float, nil] Weight for vector similarity in hybrid search (0.0-1.0)
     # @return [Array<Hash>] Search results with scores and metadata
-    def search(query, limit: nil, type: nil, path_filter: nil, min_score: nil, mode: :hybrid)
+    def search(query, limit: nil, type: nil, path_filter: nil, min_score: nil, mode: :hybrid, vector_weight: nil)
       raise ArgumentError, "Query cannot be empty" if query.nil? || query.strip.empty?
 
       limit ||= config.search_result_limit || DEFAULT_LIMIT
+      vector_weight ||= DEFAULT_VECTOR_WEIGHT
       results = []
 
       case mode
       when :hybrid
-        results = hybrid_search(query, limit, type, path_filter)
+        results = hybrid_search(query, limit, type, path_filter, vector_weight)
       when :semantic
         results = semantic_search(query, limit, type, path_filter)
       when :text
@@ -78,7 +80,7 @@ module Ragify
     private
 
     # Perform hybrid search (semantic + text)
-    def hybrid_search(query, limit, type, path_filter)
+    def hybrid_search(query, limit, type, path_filter, vector_weight)
       # Check if semantic search is available
       unless semantic_available?
         # Fall back to text-only search
@@ -97,7 +99,7 @@ module Ragify
         query_embedding,
         query,
         limit: limit,
-        vector_weight: DEFAULT_VECTOR_WEIGHT
+        vector_weight: vector_weight
       )
 
       # Apply filters (store.search_hybrid doesn't support filters directly)
