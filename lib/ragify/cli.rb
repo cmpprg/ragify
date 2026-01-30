@@ -325,7 +325,7 @@ module Ragify
       store.close
 
       puts "\n" + pastel.green("✓ Indexing complete!")
-      puts pastel.dim("Run: ragify search \"your query\" (Day 5)")
+      puts pastel.dim("Run: ragify search \"your query\"")
     rescue Ragify::Error => e
       puts pastel.red("Error: #{e.message}")
       exit 1
@@ -333,15 +333,141 @@ module Ragify
 
     desc "search QUERY", "Search for code using semantic search"
     method_option :limit, type: :numeric, aliases: "-l", default: 5, desc: "Number of results"
-    method_option :type, type: :string, aliases: "-t", desc: "Filter by type (method, class, module)"
+    method_option :type, type: :string, aliases: "-t", desc: "Filter by type (method, class, module, constant)"
     method_option :path, type: :string, aliases: "-p", desc: "Filter by file path pattern"
+    method_option :min_score, type: :numeric, aliases: "-m", desc: "Minimum similarity score (0.0-1.0)"
+    method_option :format, type: :string, aliases: "-f", default: "colorized",
+                           desc: "Output format (colorized, plain, json)"
+    method_option :semantic, type: :boolean, desc: "Use semantic search only (requires Ollama)"
+    method_option :text, type: :boolean, desc: "Use text search only (no Ollama required)"
     def search(query)
       pastel = Pastel.new
 
-      puts pastel.cyan("Searching for: #{query}")
-      puts pastel.dim("This feature will be implemented in Day 5")
+      # Validate options
+      if options[:semantic] && options[:text]
+        puts pastel.red("Error: Cannot use both --semantic and --text flags")
+        exit 1
+      end
 
-      # TODO: Implement search in Day 5
+      # Validate type filter
+      valid_types = %w[method class module constant file]
+      if options[:type] && !valid_types.include?(options[:type])
+        puts pastel.red("Error: Invalid type '#{options[:type]}'. Valid types: #{valid_types.join(", ")}")
+        exit 1
+      end
+
+      # Validate min_score
+      if options[:min_score] && (options[:min_score] < 0.0 || options[:min_score] > 1.0)
+        puts pastel.red("Error: --min-score must be between 0.0 and 1.0")
+        exit 1
+      end
+
+      # Check if ragify is initialized
+      unless File.exist?(".ragify")
+        puts pastel.yellow("Ragify not initialized. Run: ragify init")
+        exit 1
+      end
+
+      # Load configuration
+      config = Ragify::Config.load
+
+      # Open store
+      store = Ragify::Store.new
+      store.open
+
+      # Check if there's any data
+      stats = store.stats
+      if stats[:total_chunks].zero?
+        puts pastel.yellow("No indexed data found. Run: ragify index")
+        store.close
+        exit 1
+      end
+
+      # Determine search mode
+      mode = :hybrid
+      mode = :semantic if options[:semantic]
+      mode = :text if options[:text]
+
+      # Initialize embedder (may be nil if not needed for text-only search)
+      embedder = nil
+      embedder = Ragify::Embedder.new(config) unless mode == :text
+
+      # Initialize searcher
+      searcher = Ragify::Searcher.new(store, embedder, config)
+
+      # Check if semantic search is available for non-text modes
+      if mode != :text && !searcher.semantic_available?
+        if mode == :semantic
+          puts pastel.red("Error: Semantic search unavailable. Ollama not running or model not found.")
+          puts "  Start Ollama: ollama serve"
+          puts "  Pull model: ollama pull #{config.model}"
+          store.close
+          exit 1
+        else
+          # Hybrid mode falls back to text with warning
+          puts pastel.yellow("⚠️  Ollama not available. Falling back to text search.")
+          puts pastel.dim("  For better results, start Ollama: ollama serve")
+          puts
+          mode = :text
+        end
+      end
+
+      # Show search info
+      mode_label = { hybrid: "hybrid (semantic + text)", semantic: "semantic", text: "text" }[mode]
+      puts pastel.cyan("Searching: \"#{query}\"")
+      puts pastel.dim("Mode: #{mode_label} | Limit: #{options[:limit]}")
+
+      filters = []
+      filters << "type=#{options[:type]}" if options[:type]
+      filters << "path=#{options[:path]}" if options[:path]
+      filters << "min_score=#{options[:min_score]}" if options[:min_score]
+      puts pastel.dim("Filters: #{filters.join(", ")}") if filters.any?
+      puts
+
+      begin
+        # Perform search
+        results = searcher.search(
+          query,
+          limit: options[:limit],
+          type: options[:type],
+          path_filter: options[:path],
+          min_score: options[:min_score],
+          mode: mode
+        )
+
+        if results.empty?
+          puts pastel.yellow("No results found.")
+          puts
+          puts "Try:"
+          puts "  - Using different keywords"
+          puts "  - Removing filters"
+          puts "  - Lowering --min-score" if options[:min_score]
+          store.close
+          return
+        end
+
+        # Format and display results
+        format_sym = options[:format].to_sym
+        output = searcher.format_results(results, format: format_sym)
+        puts output
+
+        # Summary
+        if format_sym != :json
+          puts pastel.green("Found #{results.length} result(s)")
+          puts pastel.dim("Database: #{stats[:total_chunks]} chunks from #{stats[:total_files]} files")
+        end
+      rescue Ragify::SearchError => e
+        puts pastel.red("Search error: #{e.message}")
+        store.close
+        exit 1
+      rescue Ragify::OllamaError => e
+        puts pastel.red("Ollama error: #{e.message}")
+        puts "  Try: ragify search \"#{query}\" --text"
+        store.close
+        exit 1
+      ensure
+        store.close
+      end
     end
 
     desc "status", "Show Ragify status and statistics"
