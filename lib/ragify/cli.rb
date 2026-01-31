@@ -6,6 +6,11 @@ require "tty-progressbar"
 
 module Ragify
   class CLI < Thor
+    # Class-level quiet flag for use in class methods
+    class << self
+      attr_accessor :quiet_mode
+    end
+
     def self.exit_on_failure?
       true
     end
@@ -17,10 +22,12 @@ module Ragify
 
     desc "init", "Initialize Ragify in the current directory"
     method_option :force, type: :boolean, aliases: "-f", desc: "Force reinitialize"
+    method_option :quiet, type: :boolean, aliases: "-q", desc: "Suppress non-essential output"
     def init
       pastel = Pastel.new
+      quiet = options[:quiet]
 
-      puts pastel.cyan("Initializing Ragify...")
+      log pastel.cyan("Initializing Ragify..."), quiet
 
       # Check if already initialized
       if File.exist?(".ragify") && !options[:force]
@@ -30,19 +37,19 @@ module Ragify
 
       # Create .ragify directory
       Dir.mkdir(".ragify") unless Dir.exist?(".ragify")
-      puts pastel.green("✓ Created .ragify directory")
+      log pastel.green("✓ Created .ragify directory"), quiet
 
       # Create config file
       Ragify::Config.create_default
-      puts pastel.green("✓ Created default configuration")
+      log pastel.green("✓ Created default configuration"), quiet
 
       # Create .ragifyignore file
       create_ragifyignore
-      puts pastel.green("✓ Created .ragifyignore file")
+      log pastel.green("✓ Created .ragifyignore file"), quiet
 
       # Check Ollama installation
-      puts "\n" + pastel.cyan("Checking dependencies...")
-      check_ollama
+      log "\n" + pastel.cyan("Checking dependencies..."), quiet
+      check_ollama_and_pull_model(quiet)
 
       puts "\n" + pastel.green("✓ Ragify initialized successfully!")
       puts "\nNext steps:"
@@ -53,29 +60,32 @@ module Ragify
     desc "index [PATH]", "Index Ruby files in the project"
     method_option :path, type: :string, aliases: "-p", desc: "Path to index (default: current directory)"
     method_option :verbose, type: :boolean, aliases: "-v", desc: "Verbose output"
+    method_option :quiet, type: :boolean, aliases: "-q", desc: "Suppress non-essential output"
     method_option :strict, type: :boolean, aliases: "-s", desc: "Fail on first error (for CI/CD)"
     method_option :yes, type: :boolean, aliases: "-y", desc: "Continue without prompting on errors"
     method_option :no_embeddings, type: :boolean, desc: "Skip embedding generation"
     def index(path = nil)
       pastel = Pastel.new
       path ||= options[:path] || Dir.pwd
+      quiet = options[:quiet]
+      verbose = options[:verbose] && !quiet # verbose is ignored if quiet is set
 
-      puts pastel.cyan("Indexing project: #{path}")
+      log pastel.cyan("Indexing project: #{path}"), quiet
 
       # Load configuration
       config = Ragify::Config.load
 
       # Initialize components
-      indexer = Ragify::Indexer.new(path, config, verbose: options[:verbose])
+      indexer = Ragify::Indexer.new(path, config, verbose: verbose)
       chunker = Ragify::Chunker.new(config)
       store = Ragify::Store.new
 
       # Open the store
       store.open
-      puts pastel.dim("Database: #{store.db_path}")
+      log pastel.dim("Database: #{store.db_path}"), quiet
 
       # Discover files
-      puts "\n" + pastel.cyan("Discovering Ruby files...")
+      log "\n" + pastel.cyan("Discovering Ruby files..."), quiet
       files = indexer.discover_files
 
       if files.empty?
@@ -84,15 +94,15 @@ module Ragify
         return
       end
 
-      puts pastel.green("Found #{files.length} Ruby files")
+      log pastel.green("Found #{files.length} Ruby files"), quiet
 
-      if options[:verbose]
+      if verbose
         puts "\nFiles to index:"
         files.each { |file| puts "  - #{file}" }
       end
 
       # Parse and chunk files
-      puts "\n" + pastel.cyan("Parsing and chunking files...")
+      log "\n" + pastel.cyan("Parsing and chunking files..."), quiet
 
       all_chunks = []
       failures = []
@@ -106,12 +116,15 @@ module Ragify
         constants: 0
       }
 
-      # Create progress bar
-      bar = TTY::ProgressBar.new(
-        "[:bar] :current/:total :percent :eta",
-        total: files.length,
-        width: 40
-      )
+      # Create progress bar (unless quiet)
+      bar = nil
+      unless quiet
+        bar = TTY::ProgressBar.new(
+          "[:bar] :current/:total :percent :eta",
+          total: files.length,
+          width: 40
+        )
+      end
 
       files.each do |file_path|
         begin
@@ -132,7 +145,7 @@ module Ragify
               end
             end
 
-            if options[:verbose]
+            if verbose
               puts "\n  #{file_path}: #{chunks.length} chunks"
               chunks.each do |chunk|
                 context_str = chunk[:context].empty? ? "" : " (#{chunk[:context]})"
@@ -153,7 +166,7 @@ module Ragify
             error: "Syntax error: #{e.diagnostic.message}",
             line: e.diagnostic.location.line
           }
-          puts pastel.red("\n✗ #{file_path}:#{e.diagnostic.location.line}") if options[:verbose]
+          puts pastel.red("\n✗ #{file_path}:#{e.diagnostic.location.line}") if verbose
 
           # Strict mode: fail immediately
           if options[:strict]
@@ -169,7 +182,7 @@ module Ragify
             file: file_path,
             error: "Parse error: #{e.message}"
           }
-          puts pastel.red("\n✗ #{file_path}: #{e.message}") if options[:verbose]
+          puts pastel.red("\n✗ #{file_path}: #{e.message}") if verbose
 
           # Strict mode: fail immediately
           if options[:strict]
@@ -181,11 +194,11 @@ module Ragify
           end
         end
 
-        bar.advance
+        bar&.advance
       end
 
       # Display results
-      puts "\n"
+      puts "\n" unless quiet
       puts pastel.green("✓ Successfully processed: #{stats[:successful]} files → #{all_chunks.length} chunks")
 
       # Show failures if any
@@ -210,8 +223,8 @@ module Ragify
           exit 1
         end
 
-        # Prompt to continue (unless --yes flag)
-        unless options[:yes]
+        # Prompt to continue (unless --yes flag or --quiet flag)
+        unless options[:yes] || quiet
           require "tty-prompt"
           prompt = TTY::Prompt.new
 
@@ -232,20 +245,22 @@ module Ragify
         end
       end
 
-      puts "\nChunks extracted:"
-      puts "  Classes: #{stats[:classes]}"
-      puts "  Modules: #{stats[:modules]}"
-      puts "  Methods: #{stats[:methods]}"
-      puts "  Constants: #{stats[:constants]}"
-      puts "\n  Total chunks: #{all_chunks.length}"
+      unless quiet
+        puts "\nChunks extracted:"
+        puts "  Classes: #{stats[:classes]}"
+        puts "  Modules: #{stats[:modules]}"
+        puts "  Methods: #{stats[:methods]}"
+        puts "  Constants: #{stats[:constants]}"
+        puts "\n  Total chunks: #{all_chunks.length}"
+      end
 
       # Clear existing data for indexed files
-      puts "\n" + pastel.cyan("Clearing old data for indexed files...")
+      log "\n" + pastel.cyan("Clearing old data for indexed files..."), quiet
       files.each { |file| store.delete_file(file) }
 
       # Day 3 & 4: Generate embeddings and store
       if all_chunks.any? && !options[:no_embeddings]
-        puts "\n" + pastel.cyan("Generating embeddings...")
+        log "\n" + pastel.cyan("Generating embeddings..."), quiet
 
         begin
           # Initialize embedder
@@ -256,76 +271,80 @@ module Ragify
             # Check model availability
             if embedder.model_available?
               # Prepare texts for embedding
-              puts pastel.dim("Preparing #{all_chunks.length} chunks for embedding...")
+              log pastel.dim("Preparing #{all_chunks.length} chunks for embedding..."), quiet
               prepared_texts = all_chunks.map { |chunk| embedder.prepare_chunk_text(chunk) }
 
               # Generate embeddings with progress bar
-              puts
+              puts unless quiet
               embeddings = embedder.embed_batch(
                 prepared_texts,
                 batch_size: 5,
-                show_progress: true
+                show_progress: !quiet
               )
 
-              puts pastel.green("\n✓ Generated #{embeddings.length} embeddings")
+              log pastel.green("\n✓ Generated #{embeddings.length} embeddings"), quiet
 
               # Show cache stats
-              cache_stats = embedder.cache_stats
-              puts "  Cache: #{cache_stats[:size]} embeddings (~#{cache_stats[:memory_kb]} KB)"
-              puts "  Embedding dimensions: 768 (nomic-embed-text)"
+              unless quiet
+                cache_stats = embedder.cache_stats
+                puts "  Cache: #{cache_stats[:size]} embeddings (~#{cache_stats[:memory_kb]} KB)"
+                puts "  Embedding dimensions: 768 (nomic-embed-text)"
+              end
 
               # Day 4: Store chunks with embeddings
-              puts "\n" + pastel.cyan("Storing chunks and embeddings...")
+              log "\n" + pastel.cyan("Storing chunks and embeddings..."), quiet
 
               chunks_with_embeddings = all_chunks.zip(embeddings)
               stored_count = store.insert_batch(chunks_with_embeddings)
 
-              puts pastel.green("✓ Stored #{stored_count} chunks with embeddings")
+              log pastel.green("✓ Stored #{stored_count} chunks with embeddings"), quiet
             else
               puts pastel.yellow("\n⚠️  Model '#{config.model}' not found")
               puts "  Pull model: ollama pull #{config.model}"
-              puts "\n" + pastel.dim("Storing chunks without embeddings...")
-              store_chunks_without_embeddings(store, all_chunks)
+              log "\n" + pastel.dim("Storing chunks without embeddings..."), quiet
+              store_chunks_without_embeddings(store, all_chunks, quiet)
             end
           else
             puts pastel.yellow("\n⚠️  Ollama not running - skipping embeddings")
             puts "  Start Ollama: ollama serve"
             puts "  Then run: ragify index again"
-            puts "\n" + pastel.dim("Storing chunks without embeddings...")
-            store_chunks_without_embeddings(store, all_chunks)
+            log "\n" + pastel.dim("Storing chunks without embeddings..."), quiet
+            store_chunks_without_embeddings(store, all_chunks, quiet)
           end
         rescue Ragify::OllamaConnectionError => e
           puts pastel.yellow("\n⚠️  #{e.message}")
           puts "  Storing chunks without embeddings..."
-          store_chunks_without_embeddings(store, all_chunks)
+          store_chunks_without_embeddings(store, all_chunks, quiet)
         rescue Ragify::OllamaTimeoutError => e
           puts pastel.red("\n✗ Timeout: #{e.message}")
           puts "  Ollama may be overloaded. Try reducing batch size."
           puts "  Storing chunks without embeddings..."
-          store_chunks_without_embeddings(store, all_chunks)
+          store_chunks_without_embeddings(store, all_chunks, quiet)
         rescue Ragify::OllamaError => e
           puts pastel.red("\n✗ Embedding error: #{e.message}")
           puts "  Storing chunks without embeddings..."
-          store_chunks_without_embeddings(store, all_chunks)
+          store_chunks_without_embeddings(store, all_chunks, quiet)
         end
       elsif all_chunks.any?
         # --no-embeddings flag
-        puts "\n" + pastel.cyan("Storing chunks (embeddings skipped)...")
-        store_chunks_without_embeddings(store, all_chunks)
+        log "\n" + pastel.cyan("Storing chunks (embeddings skipped)..."), quiet
+        store_chunks_without_embeddings(store, all_chunks, quiet)
       end
 
       # Show final stats
-      puts "\n" + pastel.cyan("Database Statistics:")
-      db_stats = store.stats
-      puts "  Total chunks: #{db_stats[:total_chunks]}"
-      puts "  Total embeddings: #{db_stats[:total_vectors]}"
-      puts "  Total files: #{db_stats[:total_files]}"
-      puts "  Database size: #{db_stats[:database_size_mb]} MB"
+      unless quiet
+        puts "\n" + pastel.cyan("Database Statistics:")
+        db_stats = store.stats
+        puts "  Total chunks: #{db_stats[:total_chunks]}"
+        puts "  Total embeddings: #{db_stats[:total_vectors]}"
+        puts "  Total files: #{db_stats[:total_files]}"
+        puts "  Database size: #{db_stats[:database_size_mb]} MB"
+      end
 
       store.close
 
       puts "\n" + pastel.green("✓ Indexing complete!")
-      puts pastel.dim("Run: ragify search \"your query\"")
+      puts pastel.dim("Run: ragify search \"your query\"") unless quiet
     rescue Ragify::Error => e
       puts pastel.red("Error: #{e.message}")
       exit 1
@@ -342,8 +361,10 @@ module Ragify
                            desc: "Output format (colorized, plain, json)"
     method_option :semantic, type: :boolean, desc: "Use semantic search only (requires Ollama)"
     method_option :text, type: :boolean, desc: "Use text search only (no Ollama required)"
+    method_option :quiet, type: :boolean, aliases: "-q", desc: "Suppress non-essential output"
     def search(query)
       pastel = Pastel.new
+      quiet = options[:quiet]
 
       # Validate options
       if options[:semantic] && options[:text]
@@ -413,26 +434,28 @@ module Ragify
           exit 1
         else
           # Hybrid mode falls back to text with warning
-          puts pastel.yellow("⚠️  Ollama not available. Falling back to text search.")
-          puts pastel.dim("  For better results, start Ollama: ollama serve")
-          puts
+          puts pastel.yellow("⚠️  Ollama not available. Falling back to text search.") unless quiet
+          puts pastel.dim("  For better results, start Ollama: ollama serve") unless quiet
+          puts unless quiet
           mode = :text
         end
       end
 
       # Show search info
-      mode_label = { hybrid: "hybrid (semantic + text)", semantic: "semantic", text: "text" }[mode]
-      puts pastel.cyan("Searching: \"#{query}\"")
-      mode_info = "Mode: #{mode_label} | Limit: #{options[:limit]}"
-      mode_info += " | Vector weight: #{options[:vector_weight]}" if mode == :hybrid
-      puts pastel.dim(mode_info)
+      unless quiet
+        mode_label = { hybrid: "hybrid (semantic + text)", semantic: "semantic", text: "text" }[mode]
+        puts pastel.cyan("Searching: \"#{query}\"")
+        mode_info = "Mode: #{mode_label} | Limit: #{options[:limit]}"
+        mode_info += " | Vector weight: #{options[:vector_weight]}" if mode == :hybrid
+        puts pastel.dim(mode_info)
 
-      filters = []
-      filters << "type=#{options[:type]}" if options[:type]
-      filters << "path=#{options[:path]}" if options[:path]
-      filters << "min_score=#{options[:min_score]}" if options[:min_score]
-      puts pastel.dim("Filters: #{filters.join(", ")}") if filters.any?
-      puts
+        filters = []
+        filters << "type=#{options[:type]}" if options[:type]
+        filters << "path=#{options[:path]}" if options[:path]
+        filters << "min_score=#{options[:min_score]}" if options[:min_score]
+        puts pastel.dim("Filters: #{filters.join(", ")}") if filters.any?
+        puts
+      end
 
       begin
         # Perform search
@@ -448,11 +471,13 @@ module Ragify
 
         if results.empty?
           puts pastel.yellow("No results found.")
-          puts
-          puts "Try:"
-          puts "  - Using different keywords"
-          puts "  - Removing filters"
-          puts "  - Lowering --min-score" if options[:min_score]
+          unless quiet
+            puts
+            puts "Try:"
+            puts "  - Using different keywords"
+            puts "  - Removing filters"
+            puts "  - Lowering --min-score" if options[:min_score]
+          end
           store.close
           return
         end
@@ -463,7 +488,7 @@ module Ragify
         puts output
 
         # Summary
-        if format_sym != :json
+        if format_sym != :json && !quiet
           puts pastel.green("Found #{results.length} result(s)")
           puts pastel.dim("Database: #{stats[:total_chunks]} chunks from #{stats[:total_files]} files")
         end
@@ -482,16 +507,18 @@ module Ragify
     end
 
     desc "status", "Show Ragify status and statistics"
+    method_option :quiet, type: :boolean, aliases: "-q", desc: "Suppress non-essential output"
     def status
       pastel = Pastel.new
+      quiet = options[:quiet]
 
       unless File.exist?(".ragify")
         puts pastel.yellow("Ragify not initialized. Run: ragify init")
         return
       end
 
-      puts pastel.cyan("Ragify Status")
-      puts pastel.dim("─" * 40)
+      log pastel.cyan("Ragify Status"), quiet
+      log pastel.dim("─" * 40), quiet
 
       # Open store and get stats
       store = Ragify::Store.new
@@ -499,43 +526,53 @@ module Ragify
 
       stats = store.stats
 
-      puts "\n" + pastel.bold("Database:")
-      puts "  Path: #{store.db_path}"
-      puts "  Size: #{stats[:database_size_mb]} MB"
-      puts "  Schema version: #{stats[:schema_version]}"
+      if quiet
+        # Quiet mode: just essential info
+        puts "Files: #{stats[:total_files]}"
+        puts "Chunks: #{stats[:total_chunks]}"
+        puts "Embeddings: #{stats[:total_vectors]}"
+        puts "Size: #{stats[:database_size_mb]} MB"
+      else
+        puts "\n" + pastel.bold("Database:")
+        puts "  Path: #{store.db_path}"
+        puts "  Size: #{stats[:database_size_mb]} MB"
+        puts "  Schema version: #{stats[:schema_version]}"
 
-      puts "\n" + pastel.bold("Index Statistics:")
-      puts "  Total files indexed: #{stats[:total_files]}"
-      puts "  Total chunks: #{stats[:total_chunks]}"
-      puts "  Total embeddings: #{stats[:total_vectors]}"
+        puts "\n" + pastel.bold("Index Statistics:")
+        puts "  Total files indexed: #{stats[:total_files]}"
+        puts "  Total chunks: #{stats[:total_chunks]}"
+        puts "  Total embeddings: #{stats[:total_vectors]}"
 
-      if stats[:chunks_by_type].any?
-        puts "\n  Chunks by type:"
-        stats[:chunks_by_type].each do |type, count|
-          puts "    #{type}: #{count}"
+        if stats[:chunks_by_type].any?
+          puts "\n  Chunks by type:"
+          stats[:chunks_by_type].each do |type, count|
+            puts "    #{type}: #{count}"
+          end
         end
+
+        puts "\n  Last indexed: #{stats[:last_indexed_at]}" if stats[:last_indexed_at]
+
+        # Check Ollama status
+        puts "\n" + pastel.bold("Dependencies:")
+        check_ollama_status(pastel)
       end
-
-      puts "\n  Last indexed: #{stats[:last_indexed_at]}" if stats[:last_indexed_at]
-
-      # Check Ollama status
-      puts "\n" + pastel.bold("Dependencies:")
-      check_ollama_status(pastel)
 
       store.close
     end
 
     desc "reindex", "Rebuild the index from scratch"
     method_option :force, type: :boolean, aliases: "-f", desc: "Skip confirmation"
+    method_option :quiet, type: :boolean, aliases: "-q", desc: "Suppress non-essential output"
     def reindex
       pastel = Pastel.new
+      quiet = options[:quiet]
 
       unless File.exist?(".ragify")
         puts pastel.yellow("Ragify not initialized. Run: ragify init")
         return
       end
 
-      puts pastel.yellow("This will clear and rebuild the entire index.")
+      puts pastel.yellow("This will clear and rebuild the entire index.") unless quiet
 
       unless options[:force]
         require "tty-prompt"
@@ -549,7 +586,7 @@ module Ragify
       store = Ragify::Store.new
       store.open
       store.clear_all
-      puts pastel.green("✓ Cleared existing index")
+      log pastel.green("✓ Cleared existing index"), quiet
       store.close
 
       # Run index command
@@ -558,15 +595,17 @@ module Ragify
 
     desc "clear", "Clear all indexed data"
     method_option :force, type: :boolean, aliases: "-f", desc: "Skip confirmation"
+    method_option :quiet, type: :boolean, aliases: "-q", desc: "Suppress non-essential output"
     def clear
       pastel = Pastel.new
+      quiet = options[:quiet]
 
       unless File.exist?(".ragify")
         puts pastel.yellow("Ragify not initialized. Run: ragify init")
         return
       end
 
-      puts pastel.yellow("This will delete all indexed data.")
+      puts pastel.yellow("This will delete all indexed data.") unless quiet
 
       unless options[:force]
         require "tty-prompt"
@@ -586,16 +625,23 @@ module Ragify
 
     private
 
-    def store_chunks_without_embeddings(store, chunks)
-      bar = TTY::ProgressBar.new(
-        "Storing [:bar] :current/:total",
-        total: chunks.length,
-        width: 40
-      )
+    # Log message unless quiet mode is enabled
+    def log(message, quiet = false)
+      puts message unless quiet
+    end
+
+    def store_chunks_without_embeddings(store, chunks, quiet = false)
+      unless quiet
+        bar = TTY::ProgressBar.new(
+          "Storing [:bar] :current/:total",
+          total: chunks.length,
+          width: 40
+        )
+      end
 
       chunks.each do |chunk|
         store.insert_chunk(chunk, nil)
-        bar.advance
+        bar&.advance
       end
 
       puts Pastel.new.green("\n✓ Stored #{chunks.length} chunks (without embeddings)")
@@ -664,10 +710,82 @@ module Ragify
       end
     end
 
+    def check_ollama_and_pull_model(quiet = false)
+      pastel = Pastel.new
+
+      begin
+        # Try to connect to Ollama
+        require "faraday"
+        conn = Faraday.new(url: "http://localhost:11434") do |f|
+          f.response :json
+          f.options.timeout = 5
+          f.options.open_timeout = 5
+        end
+        response = conn.get("/api/tags")
+
+        if response.status == 200
+          log pastel.green("✓ Ollama is running"), quiet
+
+          # Check for nomic-embed-text model
+          models = response.body["models"] || []
+          has_nomic = models.any? { |m| m["name"].include?("nomic-embed-text") }
+
+          if has_nomic
+            log pastel.green("✓ nomic-embed-text model is available"), quiet
+          else
+            puts pastel.yellow("! nomic-embed-text model not found")
+            puts "  This model is required for semantic search."
+            puts "  Size: ~274MB download"
+            puts
+
+            # Prompt to pull the model
+            require "tty-prompt"
+            prompt = TTY::Prompt.new
+
+            if prompt.yes?("Would you like to download nomic-embed-text now?", default: true)
+              puts
+              puts pastel.cyan("Pulling nomic-embed-text model...")
+              puts pastel.dim("This may take a few minutes depending on your connection speed.")
+              puts
+
+              # Execute ollama pull
+              success = system("ollama pull nomic-embed-text")
+
+              if success
+                puts
+                puts pastel.green("✓ nomic-embed-text model installed successfully!")
+              else
+                puts
+                puts pastel.red("✗ Failed to pull model")
+                puts "  Try manually: ollama pull nomic-embed-text"
+              end
+            else
+              puts
+              puts pastel.yellow("Skipping model download.")
+              puts "  You can install it later: ollama pull nomic-embed-text"
+              puts "  Note: Semantic search won't work without this model."
+            end
+          end
+        end
+      rescue Faraday::ConnectionFailed
+        puts pastel.yellow("! Ollama not running")
+        puts "  Install from: https://ollama.com"
+        puts "  Then run: ollama serve"
+        puts "  Finally: ollama pull nomic-embed-text"
+      rescue Faraday::TimeoutError
+        puts pastel.yellow("! Ollama connection timed out")
+        puts "  Make sure Ollama is running: ollama serve"
+      rescue StandardError => e
+        puts pastel.yellow("! Could not check Ollama: #{e.message}")
+      end
+    end
+
     def check_ollama_status(pastel)
       require "faraday"
       conn = Faraday.new(url: "http://localhost:11434") do |f|
         f.response :json
+        f.options.timeout = 5
+        f.options.open_timeout = 5
       end
       response = conn.get("/api/tags")
 
@@ -685,6 +803,8 @@ module Ragify
       end
     rescue Faraday::ConnectionFailed
       puts pastel.yellow("  ! Ollama: not running")
+    rescue Faraday::TimeoutError
+      puts pastel.yellow("  ! Ollama: connection timed out")
     rescue StandardError => e
       puts pastel.yellow("  ! Ollama: error (#{e.message})")
     end

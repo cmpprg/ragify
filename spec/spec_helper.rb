@@ -14,4 +14,21 @@ RSpec.configure do |config|
   config.expect_with :rspec do |c|
     c.syntax = :expect
   end
+
+  # Exclude integration and ollama_required tests by default
+  # Run with: rspec --tag integration
+  # Run with: rspec --tag ollama_required
+  # Run all:  rspec --tag integration --tag ollama_required
+  config.filter_run_excluding integration: true
+  config.filter_run_excluding ollama_required: true
+
+  # Allow running only specific tags with :focus
+  config.filter_run_when_matching :focus
+
+  # Print slowest examples when PROFILE=1
+  config.profile_examples = 3 if ENV["PROFILE"]
+
+  # Randomize test order
+  config.order = :random
+  Kernel.srand config.seed
 end
