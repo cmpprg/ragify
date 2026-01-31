@@ -288,7 +288,7 @@ module Ragify
               unless quiet
                 cache_stats = embedder.cache_stats
                 puts "  Cache: #{cache_stats[:size]} embeddings (~#{cache_stats[:memory_kb]} KB)"
-                puts "  Embedding dimensions: 768 (nomic-embed-text)"
+                puts "  Embedding dimensions: #{embeddings.first.length} (#{config.model})"
               end
 
               # Day 4: Store chunks with embeddings
@@ -351,7 +351,7 @@ module Ragify
     end
 
     desc "search QUERY", "Search for code using semantic search"
-    method_option :limit, type: :numeric, aliases: "-l", default: 5, desc: "Number of results"
+    method_option :limit, type: :numeric, aliases: "-l", desc: "Number of results (default: from config)"
     method_option :type, type: :string, aliases: "-t", desc: "Filter by type (method, class, module, constant)"
     method_option :path, type: :string, aliases: "-p", desc: "Filter by file path pattern"
     method_option :min_score, type: :numeric, aliases: "-m", desc: "Minimum similarity score (0.0-1.0)"
@@ -400,6 +400,9 @@ module Ragify
       # Load configuration
       config = Ragify::Config.load
 
+      # Use config default for limit if not specified
+      limit = options[:limit] || config.search_result_limit
+
       # Open store
       store = Ragify::Store.new
       store.open
@@ -445,7 +448,7 @@ module Ragify
       unless quiet
         mode_label = { hybrid: "hybrid (semantic + text)", semantic: "semantic", text: "text" }[mode]
         puts pastel.cyan("Searching: \"#{query}\"")
-        mode_info = "Mode: #{mode_label} | Limit: #{options[:limit]}"
+        mode_info = "Mode: #{mode_label} | Limit: #{limit}"
         mode_info += " | Vector weight: #{options[:vector_weight]}" if mode == :hybrid
         puts pastel.dim(mode_info)
 
@@ -461,7 +464,7 @@ module Ragify
         # Perform search
         results = searcher.search(
           query,
-          limit: options[:limit],
+          limit: limit,
           type: options[:type],
           path_filter: options[:path],
           min_score: options[:min_score],
@@ -676,47 +679,14 @@ module Ragify
       File.write(".ragifyignore", ignore_content)
     end
 
-    def check_ollama
-      pastel = Pastel.new
-
-      begin
-        # Try to connect to Ollama
-        require "faraday"
-        conn = Faraday.new(url: "http://localhost:11434") do |f|
-          f.response :json
-        end
-        response = conn.get("/api/tags")
-
-        if response.status == 200
-          puts pastel.green("✓ Ollama is running")
-
-          # Check for nomic-embed-text model
-          models = response.body["models"] || []
-          has_nomic = models.any? { |m| m["name"].include?("nomic-embed-text") }
-
-          if has_nomic
-            puts pastel.green("✓ nomic-embed-text model is available")
-          else
-            puts pastel.yellow("! nomic-embed-text model not found")
-            puts "  Run: ollama pull nomic-embed-text"
-          end
-        end
-      rescue Faraday::ConnectionFailed
-        puts pastel.yellow("! Ollama not running")
-        puts "  Install from: https://ollama.com"
-        puts "  Then run: ollama serve"
-      rescue StandardError => e
-        puts pastel.yellow("! Could not check Ollama: #{e.message}")
-      end
-    end
-
     def check_ollama_and_pull_model(quiet = false)
       pastel = Pastel.new
+      config = Ragify::Config.load
 
       begin
         # Try to connect to Ollama
         require "faraday"
-        conn = Faraday.new(url: "http://localhost:11434") do |f|
+        conn = Faraday.new(url: config.ollama_url) do |f|
           f.response :json
           f.options.timeout = 5
           f.options.open_timeout = 5
@@ -726,14 +696,14 @@ module Ragify
         if response.status == 200
           log pastel.green("✓ Ollama is running"), quiet
 
-          # Check for nomic-embed-text model
+          # Check for configured model
           models = response.body["models"] || []
-          has_nomic = models.any? { |m| m["name"].include?("nomic-embed-text") }
+          has_model = models.any? { |m| m["name"].include?(config.model) }
 
-          if has_nomic
-            log pastel.green("✓ nomic-embed-text model is available"), quiet
+          if has_model
+            log pastel.green("✓ #{config.model} model is available"), quiet
           else
-            puts pastel.yellow("! nomic-embed-text model not found")
+            puts pastel.yellow("! #{config.model} model not found")
             puts "  This model is required for semantic search."
             puts "  Size: ~274MB download"
             puts
@@ -742,27 +712,27 @@ module Ragify
             require "tty-prompt"
             prompt = TTY::Prompt.new
 
-            if prompt.yes?("Would you like to download nomic-embed-text now?", default: true)
+            if prompt.yes?("Would you like to download #{config.model} now?", default: true)
               puts
-              puts pastel.cyan("Pulling nomic-embed-text model...")
+              puts pastel.cyan("Pulling #{config.model} model...")
               puts pastel.dim("This may take a few minutes depending on your connection speed.")
               puts
 
               # Execute ollama pull
-              success = system("ollama pull nomic-embed-text")
+              success = system("ollama pull #{config.model}")
 
               if success
                 puts
-                puts pastel.green("✓ nomic-embed-text model installed successfully!")
+                puts pastel.green("✓ #{config.model} model installed successfully!")
               else
                 puts
                 puts pastel.red("✗ Failed to pull model")
-                puts "  Try manually: ollama pull nomic-embed-text"
+                puts "  Try manually: ollama pull #{config.model}"
               end
             else
               puts
               puts pastel.yellow("Skipping model download.")
-              puts "  You can install it later: ollama pull nomic-embed-text"
+              puts "  You can install it later: ollama pull #{config.model}"
               puts "  Note: Semantic search won't work without this model."
             end
           end
@@ -771,7 +741,7 @@ module Ragify
         puts pastel.yellow("! Ollama not running")
         puts "  Install from: https://ollama.com"
         puts "  Then run: ollama serve"
-        puts "  Finally: ollama pull nomic-embed-text"
+        puts "  Finally: ollama pull #{config.model}"
       rescue Faraday::TimeoutError
         puts pastel.yellow("! Ollama connection timed out")
         puts "  Make sure Ollama is running: ollama serve"
@@ -781,8 +751,10 @@ module Ragify
     end
 
     def check_ollama_status(pastel)
+      config = Ragify::Config.load
+
       require "faraday"
-      conn = Faraday.new(url: "http://localhost:11434") do |f|
+      conn = Faraday.new(url: config.ollama_url) do |f|
         f.response :json
         f.options.timeout = 5
         f.options.open_timeout = 5
@@ -793,12 +765,12 @@ module Ragify
         puts pastel.green("  ✓ Ollama: running")
 
         models = response.body["models"] || []
-        has_nomic = models.any? { |m| m["name"].include?("nomic-embed-text") }
+        has_model = models.any? { |m| m["name"].include?(config.model) }
 
-        if has_nomic
-          puts pastel.green("  ✓ Model: nomic-embed-text available")
+        if has_model
+          puts pastel.green("  ✓ Model: #{config.model} available")
         else
-          puts pastel.yellow("  ! Model: nomic-embed-text not found")
+          puts pastel.yellow("  ! Model: #{config.model} not found")
         end
       end
     rescue Faraday::ConnectionFailed

@@ -5,17 +5,22 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe "Ragify Integration", :integration do
-  let(:temp_dir) { Dir.mktmpdir("ragify_integration_test") }
-  let(:original_dir) { Dir.pwd }
-
-  before do
-    Dir.chdir(temp_dir)
+  # Use around hook with Dir.chdir block form for robust directory handling
+  # This guarantees we return to original directory even if exceptions occur
+  around do |example|
+    temp_dir = Dir.mktmpdir("ragify_integration_test")
+    begin
+      Dir.chdir(temp_dir) do
+        @temp_dir = temp_dir
+        example.run
+      end
+    ensure
+      FileUtils.rm_rf(temp_dir)
+    end
   end
 
-  after do
-    Dir.chdir(original_dir)
-    FileUtils.rm_rf(temp_dir)
-  end
+  # Helper method to access temp_dir in tests
+  attr_reader :temp_dir
 
   describe "full indexing and search workflow" do
     before do
