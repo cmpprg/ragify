@@ -103,28 +103,28 @@ New file: `spec/edge_cases_spec.rb`
 bundle exec rspec
 
 # Run integration tests
-RUN_INTEGRATION=1 bundle exec rspec
+bundle exec rspec --tag integration
 
 # Run Ollama-dependent tests (requires Ollama running)
-RUN_OLLAMA_TESTS=1 bundle exec rspec
+bundle exec rspec --tag ollama_required
 
-# Run everything
-RUN_INTEGRATION=1 RUN_OLLAMA_TESTS=1 bundle exec rspec
+# Run everything including integration and Ollama tests
+bundle exec rspec --tag integration --tag ollama_required
 
 # Run only edge case tests
 bundle exec rspec spec/edge_cases_spec.rb
 
 # Run only integration tests
-RUN_INTEGRATION=1 bundle exec rspec spec/integration_spec.rb
+bundle exec rspec spec/integration_spec.rb --tag integration
 ```
 
 ## Test Tags
 
 | Tag | Description | How to Run |
 |-----|-------------|------------|
-| `:integration` | Full workflow tests | `RUN_INTEGRATION=1` |
-| `:ollama_required` | Requires Ollama running | `RUN_OLLAMA_TESTS=1` |
-| `:focus` | Run only focused tests | Default |
+| `:integration` | Full workflow tests | `rspec --tag integration` |
+| `:ollama_required` | Requires Ollama running | `rspec --tag ollama_required` |
+| `:focus` | Run only focused tests | Add `focus: true` to test |
 
 ## Updated Roadmap Items
 
