@@ -12,8 +12,10 @@ RuboCop::RakeTask.new
 # Disable rdoc/ri generation during gem install
 Rake::Task[:install].clear
 task :install do
+  sh "mkdir -p pkg"
   sh "gem build ragify.gemspec"
-  sh "gem install pkg/ragify-*.gem --no-document"
+  sh "mv ragify-*.gem pkg/"
+  sh "gem install pkg/ragify-*.gem --no-document --local"
 end
 
 task default: %i[spec rubocop]
