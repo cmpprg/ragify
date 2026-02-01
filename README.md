@@ -1,70 +1,73 @@
 # Ragify
 
-**Local-first RAG system for Ruby codebases using AI embeddings**
+A local-first RAG (Retrieval-Augmented Generation) system that makes Ruby codebases semantically searchable using AI embeddings.
 
-Ragify makes your Ruby codebase semantically searchable. Index your code once, then ask natural language questions to find relevant code snippets instantly.
+Ask natural language questions about your code and get relevant snippets instantly—all running locally on your machine.
 
 ```bash
 # Index your codebase
 ragify index
 
-# Search semantically
+# Search with natural language
 ragify search "how do we handle user authentication?"
 
-# Get relevant code snippets with context
+# Get relevant code with context
 ```
 
 ## Features
 
-- 🔍 **Semantic Search**: Ask questions in natural language, get relevant code
-- 🏠 **Local-First**: All processing happens locally using Ollama
-- 🚀 **Fast**: SQLite vector database for efficient similarity search
-- 🔒 **Private**: Your code never leaves your machine
-- 🎯 **Context-Aware**: Preserves class/module context in results
+- **Semantic Search** — Ask questions in natural language, find code by meaning, not just keywords
+- **Local-First** — All processing happens locally using Ollama. Your code never leaves your machine
+- **Fast** — SQLite with FTS5 full-text search and vector similarity for efficient retrieval
+- **Context-Aware** — Results include class/module context, line numbers, and visibility
+- **Flexible** — Hybrid search combining semantic and keyword matching for best results
+- **Privacy-Focused** — No external API calls, no data collection, completely offline
 
-## Status
+## Requirements
 
-**Current Version**: 0.1.0 (Day 1 - MVP in progress)
+### Ruby
 
-- ✅ Day 1: Foundation & Project Setup
-- ⏳ Day 2: Code Parsing & Chunking (next)
-- ⏳ Day 3: Ollama Integration & Embeddings
-- ⏳ Day 4: SQLite Vector Storage
-- ⏳ Day 5: Search Functionality
-- ⏳ Day 6: CLI Polish & Testing
-- ⏳ Day 7: Documentation & Release
+- Ruby 3.0 or higher
 
-## Prerequisites
+```bash
+ruby --version  # Should be 3.0+
+```
 
-Before using Ragify, you need:
+### Ollama (for semantic search)
 
-1. **Ruby 3.0+**
-   ```bash
-   ruby --version  # Should be 3.0 or higher
-   ```
+Ollama provides local AI embeddings. Without Ollama, Ragify falls back to text-only search.
 
-2. **Ollama** (for local embeddings)
-   ```bash
-   # Install Ollama
-   # macOS:
-   brew install ollama
-   
-   # Linux:
-   curl -fsSL https://ollama.com/install.sh | sh
-   
-   # Or download from: https://ollama.com/download
-   ```
+**macOS:**
+```bash
+brew install ollama
+```
 
-3. **Start Ollama and pull the embedding model**
-   ```bash
-   # Start Ollama server
-   ollama serve
-   
-   # In another terminal, pull the model
-   ollama pull nomic-embed-text
-   ```
+**Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Or download from:** https://ollama.com/download
+
+**Start Ollama and pull the embedding model:**
+```bash
+# Start the Ollama server (run in background or separate terminal)
+ollama serve
+
+# Pull the recommended embedding model (~274MB)
+ollama pull nomic-embed-text
+
+# Verify installation
+ollama list  # Should show nomic-embed-text
+```
+
+### SQLite
+
+SQLite 3.35+ is required (included with most systems). The sqlite3 gem handles the database layer.
 
 ## Installation
+
+### From Source
 
 ```bash
 # Clone the repository
@@ -74,92 +77,178 @@ cd ragify
 # Install dependencies
 bundle install
 
-# Make the CLI executable
-chmod +x exe/ragify
-
 # Install the gem locally
 bundle exec rake install
+
+# If using asdf
+asdf reshim ruby
+
+# If using rbenv
+rbenv rehash
+
+# Verify installation
+ragify --version
+```
+
+### From RubyGems (coming soon)
+
+```bash
+gem install ragify
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Initialize Ragify in your Ruby project
+# 1. Navigate to your Ruby project
 cd /path/to/your/ruby/project
+
+# 2. Initialize Ragify (creates .ragify directory and config)
 ragify init
 
-# 2. Index your codebase (Day 2+)
+# 3. Index your codebase
 ragify index
 
-# 3. Search for code (Day 5+)
-ragify search "user authentication"
+# 4. Search!
+ragify search "authentication"
+ragify search "how do users log in"
 ragify search "database queries"
-ragify search "api endpoints"
 ```
 
-## Day 1 Completion ✓
+## Usage
 
-The following Day 1 tasks are complete:
+### Commands
 
-- ✅ Gem structure created with Bundler
-- ✅ `exe/ragify` executable setup
-- ✅ Core dependencies added to gemspec
-- ✅ Basic CLI structure with Thor
-  - `ragify init` - Initialize Ragify
-  - `ragify index` - Index files (discovers files)
-  - `ragify search` - Search (stub)
-  - `ragify status` - Show status (stub)
-  - `ragify version` - Show version
-- ✅ File discovery implemented
-  - Recursive Ruby file discovery
-  - Ignore patterns (.ragifyignore)
-  - Binary file detection
-- ✅ Basic file reading and validation
-  - Encoding error handling
-  - Empty file detection
-- ✅ Project structure created
-  - `lib/ragify/cli.rb` - Thor CLI
-  - `lib/ragify/config.rb` - Configuration management
-  - `lib/ragify/indexer.rb` - File discovery & validation
-  - `lib/ragify/chunker.rb` - (stub for Day 2)
-  - `lib/ragify/embedder.rb` - (stub for Day 3)
-  - `lib/ragify/store.rb` - (stub for Day 4)
-  - `lib/ragify/searcher.rb` - (stub for Day 5)
+| Command | Description |
+|---------|-------------|
+| `ragify init` | Initialize Ragify in the current directory |
+| `ragify index` | Index all Ruby files in the project |
+| `ragify search QUERY` | Search for code matching the query |
+| `ragify status` | Show index statistics and status |
+| `ragify reindex` | Clear and rebuild the entire index |
+| `ragify clear` | Delete all indexed data |
+| `ragify version` | Show version information |
 
-### Testing Day 1
+### Searching
+
+#### Basic Search
 
 ```bash
-# Test the CLI
-./exe/ragify --version
+# Hybrid search (default) - combines semantic + keyword matching
+ragify search "user authentication"
 
-# Initialize in a test project
-cd ~/your-test-project
-./exe/ragify init
+# Text-only search (no Ollama required)
+ragify search "authenticate" --text
 
-# Test file discovery with verbose output
-./exe/ragify index --verbose
+# Semantic-only search (requires Ollama)
+ragify search "how does login work" --semantic
 ```
 
-Expected output:
-```
-Found 42 Ruby files
-  Found: app/controllers/users_controller.rb
-  Found: app/models/user.rb
-  Found: lib/authentication.rb
-  ...
+#### Filtering Results
 
-Ready to index 42 files
+```bash
+# Limit number of results
+ragify search "user" --limit 10
+ragify search "user" -l 10
+
+# Filter by chunk type
+ragify search "validate" --type method
+ragify search "User" --type class
+ragify search "Auth" --type module
+ragify search "MAX" --type constant
+
+# Filter by file path
+ragify search "create" --path controllers
+ragify search "query" --path models
+
+# Minimum similarity score (0.0-1.0)
+ragify search "auth" --min-score 0.5
+
+# Combine filters
+ragify search "validate" --type method --path models --limit 5
+```
+
+#### Output Formats
+
+```bash
+# Colorized output (default)
+ragify search "user"
+
+# Plain text (no colors)
+ragify search "user" --format plain
+
+# JSON (for scripting)
+ragify search "user" --format json
+```
+
+#### Tuning Hybrid Search
+
+The `--vector-weight` flag controls the balance between semantic and keyword search:
+
+```bash
+# Default: 70% semantic, 30% text
+ragify search "authentication"
+
+# More semantic (for natural language queries)
+ragify search "how do users log in" --vector-weight 0.9
+
+# More text-based (for exact method names)
+ragify search "find_by_email" --vector-weight 0.3
+
+# Balanced
+ragify search "password" -w 0.5
+```
+
+### Indexing
+
+```bash
+# Index current directory
+ragify index
+
+# Index a specific path
+ragify index --path /path/to/project
+
+# Verbose output (see every file and chunk)
+ragify index --verbose
+
+# Quiet mode (minimal output, for scripts)
+ragify index --quiet
+
+# Strict mode (fail on first error, for CI/CD)
+ragify index --strict
+
+# Skip prompts (for automation)
+ragify index --yes
+
+# Skip embedding generation
+ragify index --no-embeddings
+```
+
+### Initialization
+
+```bash
+# Initialize with defaults
+ragify init
+
+# Force re-initialization
+ragify init --force
+
+# Quiet mode
+ragify init --quiet
 ```
 
 ## Configuration
 
-After running `ragify init`, you'll have a `.ragify/config.yml` file:
+Ragify stores its configuration in `.ragify/config.yml`:
 
 ```yaml
+# Ragify Configuration
+
 # Ollama server URL
 ollama_url: http://localhost:11434
 
 # Embedding model to use
+# Recommended: nomic-embed-text (768 dimensions, 8K context)
+# Alternatives: snowflake-arctic-embed, all-minilm, mxbai-embed-large
 model: nomic-embed-text
 
 # Maximum lines per code chunk
@@ -168,57 +257,179 @@ chunk_size_limit: 1000
 # Default number of search results
 search_result_limit: 5
 
-# Ignore patterns
+# Additional ignore patterns (beyond .ragifyignore)
 ignore_patterns:
   - spec/**/*
   - test/**/*
   - vendor/**/*
+  - node_modules/**/*
+  - db/schema.rb
 ```
 
-## Architecture
+### Ignore Patterns
+
+Create a `.ragifyignore` file to exclude files from indexing (similar to `.gitignore`):
+
+```gitignore
+# Test files
+spec/**/*
+test/**/*
+
+# Generated files
+db/schema.rb
+
+# Dependencies
+vendor/**/*
+node_modules/**/*
+
+# Build artifacts
+pkg/**/*
+tmp/**/*
+
+# Documentation
+doc/**/*
+```
+
+Default ignore patterns (always applied):
+- `.git/**/*`
+- `.ragify/**/*`
+- `vendor/**/*`
+- `node_modules/**/*`
+- `tmp/**/*`
+- `log/**/*`
+- `coverage/**/*`
+- `.bundle/**/*`
+
+## How It Works
+
+### Architecture
 
 ```
 ┌─────────────────┐
-│   Ragify CLI    │  (Thor-based CLI)
+│      CLI        │  ← Thor-based command interface
 └────────┬────────┘
          │
     ┌────┴────┐
     │         │
-┌───▼────┐ ┌─▼────────┐
+┌───▼────┐ ┌──▼───────┐
 │Indexer │ │Searcher  │
-└───┬────┘ └─┬────────┘
-    │        │
-┌───▼────┐ ┌▼─────────┐
+└───┬────┘ └──┬───────┘
+    │         │
+┌───▼────┐ ┌──▼───────┐
 │Chunker │ │Embedder  │  → Ollama (nomic-embed-text)
-└───┬────┘ └─┬────────┘
-    │        │
-    └───┬────┘
-        │
-   ┌────▼────┐
-   │  Store  │  → SQLite + Vector Extension
-   └─────────┘
+└───┬────┘ └──┬───────┘
+    │         │
+    └────┬────┘
+         │
+    ┌────▼────┐
+    │  Store  │  → SQLite + FTS5
+    └─────────┘
 ```
 
-## Why These Technologies?
+### Indexing Pipeline
 
-- **Ollama + nomic-embed-text**: Best local embedding model for code
-  - 768 dimensions (good balance)
-  - 8K context window (handles large methods)
-  - Fast and accurate for technical content
-  
-- **SQLite**: Simple, portable, no server needed
-  - Vector extension for similarity search
-  - Single file database
-  
-- **Parser gem**: Robust Ruby AST parsing
-  - Handles modern Ruby syntax
-  - Extracts semantic structure
+1. **Discovery** — Find all `.rb` files, respecting ignore patterns
+2. **Parsing** — Parse Ruby files into AST using the Parser gem
+3. **Chunking** — Extract classes, modules, methods, and constants with context
+4. **Embedding** — Generate vector embeddings using Ollama
+5. **Storage** — Store chunks and embeddings in SQLite
+
+### Search Pipeline
+
+1. **Query Embedding** — Convert search query to vector (for semantic search)
+2. **Hybrid Search** — Combine vector similarity with FTS5 text matching
+3. **Filtering** — Apply type, path, and score filters
+4. **Ranking** — Sort by combined relevance score
+5. **Formatting** — Display results with code snippets and context
+
+### Chunk Types
+
+Ragify extracts these semantic chunks from your code:
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `class` | Class definitions | `class User < ApplicationRecord` |
+| `module` | Module definitions | `module Authentication` |
+| `method` | Instance and class methods | `def authenticate(password)` |
+| `constant` | Constant assignments | `MAX_RETRIES = 3` |
+
+Each chunk includes:
+- Full source code
+- File path and line numbers
+- Context (parent class/module)
+- Comments/docstrings
+- Metadata (visibility, parameters, etc.)
+
+## Troubleshooting
+
+### "Ollama not running"
+
+```bash
+# Start Ollama server
+ollama serve
+
+# Or run in background
+ollama serve &
+```
+
+### "Model not found"
+
+```bash
+# Pull the embedding model
+ollama pull nomic-embed-text
+
+# Verify it's available
+ollama list
+```
+
+### "No Ruby files found"
+
+- Check that you're in a directory with `.rb` files
+- Review your `.ragifyignore` patterns
+- Run `ragify index --verbose` to see what's being discovered
+
+### "Semantic search unavailable"
+
+Ragify automatically falls back to text-only search when Ollama isn't available. For best results:
+
+1. Install Ollama
+2. Run `ollama serve`
+3. Run `ragify index` to generate embeddings
+
+### "Permission denied" or file errors
+
+```bash
+# Ensure the gem is properly installed
+bundle exec rake install
+
+# Reshim if using version managers
+asdf reshim ruby   # asdf
+rbenv rehash       # rbenv
+```
+
+### Search returns no results
+
+- Try different keywords
+- Remove filters (`--type`, `--path`, `--min-score`)
+- Use `--text` flag for keyword-only search
+- Check `ragify status` to verify files are indexed
+
+### Large codebase performance
+
+For very large codebases (500+ files):
+
+- Indexing may take several minutes (embedding generation is the bottleneck)
+- Consider using `--no-embeddings` for quick text-only indexing
+- Use `.ragifyignore` to exclude unnecessary files
 
 ## Development
 
 ```bash
 # Run tests
 bundle exec rspec
+
+# Run tests with Ollama integration tests
+bundle exec rspec --tag ollama_required
 
 # Run linter
 bundle exec rubocop
@@ -229,26 +440,57 @@ bundle exec rake
 # Install locally for testing
 bundle exec rake install
 
-# Build gem
-bundle exec rake build
+# Interactive console
+bin/console
 ```
+
+### Project Structure
+
+```
+ragify/
+├── exe/ragify           # CLI executable
+├── lib/
+│   ├── ragify.rb        # Main module
+│   └── ragify/
+│       ├── chunker.rb   # Ruby code parsing & chunking
+│       ├── cli.rb       # Thor CLI commands
+│       ├── config.rb    # Configuration management
+│       ├── embedder.rb  # Ollama embedding generation
+│       ├── indexer.rb   # File discovery
+│       ├── searcher.rb  # Search implementation
+│       ├── store.rb     # SQLite storage
+│       └── version.rb   # Version constant
+├── spec/                # RSpec tests
+└── demos/               # Demo scripts
+```
+
+## Why These Technologies?
+
+- **Ollama + nomic-embed-text** — Best local embedding model for code. 768 dimensions, 8K context window, fast and accurate for technical content.
+
+- **SQLite + FTS5** — Simple, portable, no server needed. Single file database with built-in full-text search.
+
+- **Parser gem** — Robust Ruby AST parsing. Handles modern Ruby syntax and extracts semantic structure.
+
+## Limitations
+
+- **Ruby only** — Currently only parses Ruby files. Multi-language support planned for future versions.
+- **Full reindex** — No incremental updates yet. File changes require reindexing.
+- **Memory usage** — Embedding cache is kept in memory during indexing.
 
 ## Roadmap
 
-See [ragify_roadmap.md](ragify_roadmap.md) for the complete 7-day development plan.
+See [ragify_roadmap.md](ragify_roadmap.md) for the development plan and future enhancements:
 
-### Next Steps (Day 2)
-
-- Implement Ruby code parsing with Parser gem
-- Build intelligent chunking system
-- Extract classes, modules, methods with metadata
-- Create structured chunk data format
+- Incremental updates (file change detection)
+- Watch mode for development
+- Multi-language support (JavaScript, Python, Go)
+- Web UI and VS Code extension
+- API server mode
 
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at https://github.com/ryanmcgarvey/ragify.
-
-This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -257,5 +499,5 @@ The gem is available as open source under the terms of the [MIT License](LICENSE
 ## Acknowledgments
 
 - Built with [Ollama](https://ollama.com) for local AI embeddings
-- Uses [nomic-embed-text](https://huggingface.co/nomic-ai/nomic-embed-text-v1) for code embeddings
+- Uses [nomic-embed-text](https://huggingface.co/nomic-ai/nomic-embed-text-v1) model
 - Inspired by the need for better code search in large Ruby projects
