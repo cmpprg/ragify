@@ -7,7 +7,7 @@ module Ragify
   # Chunker splits Ruby code into semantically meaningful chunks
   # Uses the Parser gem to build an AST and extract classes, modules, methods, and constants
   class Chunker
-    # Maximum lines for a single chunk before splitting
+    # Maximum lines for a single chunk before splitting (fallback if config not set)
     MAX_CHUNK_LINES = 100
 
     attr_reader :config
@@ -51,10 +51,98 @@ module Ragify
       # Filter out anonymous chunks - they're not useful for search
       chunks.reject! { |chunk| chunk[:name] == "anonymous" }
 
-      chunks
+      # Split large chunks with sliding window overlap
+      split_large_chunks(chunks)
     end
 
     private
+
+    # Split large chunks using sliding window with overlap
+    # @param chunks [Array<Hash>] Array of chunks
+    # @return [Array<Hash>] Array with large chunks split into parts
+    def split_large_chunks(chunks)
+      result = []
+
+      chunks.each do |chunk|
+        lines = chunk[:code].lines
+        lines_count = lines.count
+        chunk_limit = @config.chunk_size_limit || MAX_CHUNK_LINES
+
+        if lines_count <= chunk_limit
+          # Chunk fits within limit - keep as is
+          result << chunk
+        else
+          # Chunk is too large - split with overlap
+          parts = split_chunk_with_overlap(chunk, lines, chunk_limit)
+          result.concat(parts)
+        end
+      end
+
+      result
+    end
+
+    # Split a single chunk into multiple parts with overlap
+    # @param chunk [Hash] Original chunk
+    # @param lines [Array<String>] Lines of code
+    # @param limit [Integer] Maximum lines per chunk
+    # @return [Array<Hash>] Array of chunk parts
+    def split_chunk_with_overlap(chunk, lines, limit)
+      overlap = @config.chunk_overlap || 20
+      stride = limit - overlap # How far we move forward each time
+      total_lines = lines.count
+      parts = []
+      part_number = 1
+
+      # Calculate total parts for metadata
+      total_parts = ((total_lines - overlap).to_f / stride).ceil
+      total_parts = [total_parts, 1].max # At least 1 part
+
+      start_idx = 0
+      while start_idx < total_lines
+        # Calculate end index for this part
+        end_idx = [start_idx + limit, total_lines].min
+
+        # Extract lines for this part
+        part_lines = lines[start_idx...end_idx]
+        part_code = part_lines.join
+
+        # Calculate actual line numbers in original file
+        part_start_line = chunk[:start_line] + start_idx
+        part_end_line = chunk[:start_line] + end_idx - 1
+
+        # Create part chunk
+        part_chunk = {
+          id: "#{chunk[:id]}_part#{part_number}",
+          type: chunk[:type],
+          name: chunk[:name],
+          code: part_code,
+          context: chunk[:context],
+          file_path: chunk[:file_path],
+          start_line: part_start_line,
+          end_line: part_end_line,
+          comments: part_number == 1 ? chunk[:comments] : "", # Only first part gets comments
+          metadata: {
+            **chunk[:metadata],
+            is_partial: true,
+            part_number: part_number,
+            total_parts: total_parts,
+            parent_chunk_id: chunk[:id],
+            overlap_lines: overlap
+          }
+        }
+
+        parts << part_chunk
+        part_number += 1
+
+        # Move forward by stride amount
+        start_idx += stride
+
+        # If we're close to the end, just finish
+        break if start_idx + overlap >= total_lines
+      end
+
+      parts
+    end
 
     # Extract chunks from an AST node recursively
     def extract_chunks(node, file_path, content, chunks, context = [])
@@ -191,9 +279,9 @@ module Ragify
       # Extract the code for this chunk
       code = extract_code(content, start_line, end_line)
 
-      # If the chunk is too large, we still include it but mark it
+      # Mark large chunks (for visibility, splitting happens later)
       lines_count = end_line - start_line + 1
-      if lines_count > MAX_CHUNK_LINES
+      if lines_count > 100
         metadata[:large_chunk] = true
         metadata[:lines_count] = lines_count
       end
@@ -269,76 +357,75 @@ module Ragify
     def extract_name(node)
       return "anonymous" if node.nil?
       return node.to_s if node.is_a?(Symbol)
+      return node.children[1].to_s if node.is_a?(Parser::AST::Node) && node.type == :const
 
-      case node.type
-      when :const
-        node.children[1].to_s
-      when :sym
-        node.children[0].to_s
-      else
-        node.to_s
-      end
+      "anonymous"
     end
 
     # Extract parent class name from a class node
-    def extract_parent_class(class_node)
-      parent = class_node.children[1]
-      return nil unless parent
+    def extract_parent_class(node)
+      parent_node = node.children[1]
+      return nil unless parent_node
 
-      extract_name(parent)
+      return unless parent_node.is_a?(Parser::AST::Node) && parent_node.type == :const
+
+      parent_node.children[1].to_s
     end
 
-    # Extract method parameters
-    def extract_parameters(method_node)
-      args_node = method_node.children[1]
-      return [] unless args_node
+    # Extract method parameters from a method node
+    def extract_parameters(node)
+      return [] unless node.is_a?(Parser::AST::Node)
 
-      args_node.children.map do |arg|
-        next nil unless arg.is_a?(Parser::AST::Node)
+      # Method parameters are in different positions for def vs defs
+      args_node = if node.type == :defs
+                    node.children[2]
+                  else
+                    node.children[1]
+                  end
 
-        case arg.type
+      return [] unless args_node && args_node.is_a?(Parser::AST::Node)
+
+      params = []
+
+      args_node.children.each do |child|
+        next unless child.is_a?(Parser::AST::Node)
+
+        case child.type
         when :arg
-          arg.children[0].to_s
+          params << child.children[0].to_s
         when :optarg
-          default_val = arg.children[1]&.location&.expression&.source || "..."
-          "#{arg.children[0]}=#{default_val}"
-        when :kwarg
-          "#{arg.children[0]}:"
-        when :kwoptarg
-          default_val = arg.children[1]&.location&.expression&.source || "..."
-          "#{arg.children[0]}: #{default_val}"
+          params << "#{child.children[0]}=#{child.children[1].location.expression.source}"
         when :restarg
-          "*#{arg.children[0]}"
+          params << "*#{child.children[0]}"
+        when :kwarg
+          params << "#{child.children[0]}:"
+        when :kwoptarg
+          params << "#{child.children[0]}: #{child.children[1].location.expression.source}"
         when :kwrestarg
-          "**#{arg.children[0]}"
+          params << "**#{child.children[0]}"
         when :blockarg
-          "&#{arg.children[0]}"
-        else
-          arg.to_s
+          params << "&#{child.children[0]}"
         end
-      end.compact
-    rescue StandardError
-      []
+      end
+
+      params
     end
 
-    # Determine method visibility (public, private, protected)
-    # This is a simplified version - a full implementation would need to track
-    # visibility modifiers in the AST traversal
+    # Determine method visibility from context
     def determine_visibility(node, content)
-      # Check if the method appears after a visibility modifier
       location = node.location
       return "public" unless location
 
-      # Look for visibility keywords before this method
-      lines_before = content.lines[0...location.line - 1]
-      lines_before.reverse_each do |line|
-        stripped = line.strip
-        return "private" if stripped == "private"
-        return "protected" if stripped == "protected"
-        return "public" if stripped == "public"
+      # Look backwards from method definition for visibility modifiers
+      lines = content.lines
+      (location.line - 1).downto(0) do |i|
+        line = lines[i].strip
+        return "private" if line == "private"
+        return "protected" if line == "protected"
+        return "public" if line == "public"
 
-        # Stop at class/module boundaries
-        break if stripped.match?(/^(class|module)\b/)
+        # Stop if we hit another definition
+        break if line.match?(/^(class|module)\b/)
       end
 
       "public"

@@ -415,4 +415,367 @@ RSpec.describe Ragify::Chunker do
       end
     end
   end
+
+  # frozen_string_literal: true
+
+  # ========================================================================
+  # ADDITIONAL TESTS FOR SLIDING WINDOW CHUNKING
+  # Add these test contexts to the end of your existing spec/chunker_spec.rb
+  # (before the final "end" that closes the RSpec.describe block)
+  # ========================================================================
+
+  describe "sliding window chunking for large methods" do
+    let(:config) { Ragify::Config.new({ "chunk_size_limit" => 150, "chunk_overlap" => 20 }) }
+    let(:chunker) { described_class.new(config) }
+
+    context "with large methods requiring splitting" do
+      let(:content) do
+        # Create a 200-line method
+        lines = ["class BigClass", "  def huge_method"]
+        200.times do |i|
+          lines << "    puts \"Line #{i}\""
+        end
+        lines += ["  end", "end"]
+        lines.join("\n")
+      end
+
+      it "splits large methods into multiple parts" do
+        chunks = chunker.chunk_file("big.rb", content)
+
+        method_parts = chunks.select { |c| c[:name] == "huge_method" }
+
+        # With 150-line limit and 20-line overlap:
+        # 200 lines total, stride = 130
+        # Part 1: 0-150
+        # Part 2: 130-200 (70 lines, overlaps with part 1)
+        expect(method_parts.length).to eq(2)
+      end
+
+      it "marks chunks as partial with correct metadata" do
+        chunks = chunker.chunk_file("big.rb", content)
+
+        method_parts = chunks.select { |c| c[:name] == "huge_method" }
+
+        method_parts.each do |part|
+          expect(part[:metadata][:is_partial]).to be true
+          expect(part[:metadata][:parent_chunk_id]).to be_a(String)
+          expect(part[:metadata][:total_parts]).to eq(2)
+          expect(part[:metadata][:overlap_lines]).to eq(20)
+        end
+
+        # Verify part numbers
+        expect(method_parts[0][:metadata][:part_number]).to eq(1)
+        expect(method_parts[1][:metadata][:part_number]).to eq(2)
+      end
+
+      it "creates overlapping content between parts" do
+        chunks = chunker.chunk_file("big.rb", content)
+
+        method_parts = chunks.select { |c| c[:name] == "huge_method" }.sort_by { |p| p[:metadata][:part_number] }
+
+        part1_lines = method_parts[0][:code].lines
+        part2_lines = method_parts[1][:code].lines
+
+        # Last 20 lines of part 1 should match first 20 lines of part 2
+        part1_last_20 = part1_lines[-20..-1]
+        part2_first_20 = part2_lines[0..19]
+
+        expect(part1_last_20).to eq(part2_first_20)
+      end
+
+      it "assigns unique IDs to each part" do
+        chunks = chunker.chunk_file("big.rb", content)
+
+        method_parts = chunks.select { |c| c[:name] == "huge_method" }
+        ids = method_parts.map { |p| p[:id] }
+
+        # All IDs should be unique
+        expect(ids.uniq.length).to eq(ids.length)
+
+        # IDs should follow pattern: parent_id_part1, parent_id_part2
+        expect(ids[0]).to end_with("_part1")
+        expect(ids[1]).to end_with("_part2")
+      end
+
+      it "preserves comments only in first part" do
+        content_with_comments = <<~RUBY
+          class MyClass
+            # This is a very important method
+            # It does a lot of things
+            def huge_method
+              #{"puts 'line'\n" * 200}
+            end
+          end
+        RUBY
+
+        chunks = chunker.chunk_file("test.rb", content_with_comments)
+        method_parts = chunks.select { |c| c[:name] == "huge_method" }.sort_by { |p| p[:metadata][:part_number] }
+
+        # First part should have comments
+        expect(method_parts[0][:comments]).to include("This is a very important method")
+
+        # Subsequent parts should not have comments
+        method_parts[1..-1].each do |part|
+          expect(part[:comments]).to eq("")
+        end
+      end
+
+      it "maintains correct line numbers across parts" do
+        chunks = chunker.chunk_file("big.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "huge_method" }.sort_by { |p| p[:metadata][:part_number] }
+
+        # Part 1 should start at the method definition
+        expect(method_parts[0][:start_line]).to eq(2)
+
+        # Part 2 should start 130 lines later (150 - 20 overlap)
+        expect(method_parts[1][:start_line]).to eq(132)
+
+        # Parts should overlap by exactly 20 lines
+        part1_end = method_parts[0][:end_line]
+        part2_start = method_parts[1][:start_line]
+
+        expect(part1_end - part2_start + 1).to eq(20)
+      end
+    end
+
+    context "with very large methods (500+ lines)" do
+      let(:content) do
+        lines = ["class VeryBigClass", "  def massive_method"]
+        500.times do |i|
+          lines << "    puts \"Line #{i}\""
+        end
+        lines += ["  end", "end"]
+        lines.join("\n")
+      end
+
+      it "splits into multiple parts correctly" do
+        chunks = chunker.chunk_file("massive.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "massive_method" }
+
+        # With 150-line limit and 20-line overlap, stride = 130
+        # 500 lines: Part 1: 0-150, Part 2: 130-280, Part 3: 260-410, Part 4: 390-500
+        expect(method_parts.length).to eq(4)
+      end
+
+      it "has consistent total_parts metadata" do
+        chunks = chunker.chunk_file("massive.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "massive_method" }
+
+        method_parts.each do |part|
+          expect(part[:metadata][:total_parts]).to eq(4)
+        end
+      end
+    end
+
+    context "with methods just under the limit" do
+      let(:content) do
+        # Create a 140-line method (under 150 limit)
+        lines = ["class SmallClass", "  def medium_method"]
+        140.times do |i|
+          lines << "    puts \"Line #{i}\""
+        end
+        lines += ["  end", "end"]
+        lines.join("\n")
+      end
+
+      it "does not split methods under the limit" do
+        chunks = chunker.chunk_file("small.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "medium_method" }
+
+        # Should be exactly 1 chunk (not split)
+        expect(method_parts.length).to eq(1)
+        expect(method_parts[0][:metadata][:is_partial]).to be_nil
+      end
+    end
+
+    context "with custom chunk size and overlap" do
+      let(:small_config) { Ragify::Config.new({ "chunk_size_limit" => 50, "chunk_overlap" => 10 }) }
+      let(:small_chunker) { described_class.new(small_config) }
+
+      let(:content) do
+        lines = ["class TestClass", "  def test_method"]
+        100.times do |i|
+          lines << "    puts \"Line #{i}\""
+        end
+        lines += ["  end", "end"]
+        lines.join("\n")
+      end
+
+      it "respects custom chunk size limit" do
+        chunks = small_chunker.chunk_file("test.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "test_method" }
+
+        # With 50-line limit and 10-line overlap, stride = 40
+        # 100 lines: Part 1: 0-50, Part 2: 40-90, Part 3: 80-100
+        expect(method_parts.length).to eq(3)
+      end
+
+      it "respects custom overlap configuration" do
+        chunks = small_chunker.chunk_file("test.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "test_method" }.sort_by { |p| p[:metadata][:part_number] }
+
+        method_parts.each do |part|
+          expect(part[:metadata][:overlap_lines]).to eq(10)
+        end
+
+        # Verify actual 10-line overlap
+        part1_last_10 = method_parts[0][:code].lines[-10..-1]
+        part2_first_10 = method_parts[1][:code].lines[0..9]
+        expect(part1_last_10).to eq(part2_first_10)
+      end
+    end
+
+    context "with multiple large methods in same file" do
+      let(:content) do
+        parts = ["class MultiMethodClass"]
+
+        # First large method (200 lines)
+        parts << "  def first_method"
+        200.times { |i| parts << "    puts 'first #{i}'" }
+        parts << "  end"
+
+        # Second large method (300 lines)
+        parts << "  def second_method"
+        300.times { |i| parts << "    puts 'second #{i}'" }
+        parts << "  end"
+
+        parts << "end"
+        parts.join("\n")
+      end
+
+      it "splits both methods independently" do
+        chunks = chunker.chunk_file("multi.rb", content)
+
+        first_parts = chunks.select { |c| c[:name] == "first_method" }
+        second_parts = chunks.select { |c| c[:name] == "second_method" }
+
+        # First method: 200 lines -> 2 parts
+        expect(first_parts.length).to eq(2)
+
+        # Second method: 300 lines -> 3 parts
+        expect(second_parts.length).to eq(3)
+      end
+
+      it "maintains unique parent_chunk_ids for different methods" do
+        chunks = chunker.chunk_file("multi.rb", content)
+
+        first_parts = chunks.select { |c| c[:name] == "first_method" }
+        second_parts = chunks.select { |c| c[:name] == "second_method" }
+
+        first_parent_id = first_parts[0][:metadata][:parent_chunk_id]
+        second_parent_id = second_parts[0][:metadata][:parent_chunk_id]
+
+        # Parent IDs should be different
+        expect(first_parent_id).not_to eq(second_parent_id)
+
+        # All parts of same method should share parent ID
+        expect(first_parts.map { |p| p[:metadata][:parent_chunk_id] }.uniq).to eq([first_parent_id])
+        expect(second_parts.map { |p| p[:metadata][:parent_chunk_id] }.uniq).to eq([second_parent_id])
+      end
+    end
+
+    context "with nested classes containing large methods" do
+      let(:content) do
+        <<~RUBY
+          module Outer
+            class Inner
+              def long_method
+                #{"puts 'line'\n" * 200}
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "preserves context in all split chunks" do
+        chunks = chunker.chunk_file("nested.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "long_method" }
+
+        method_parts.each do |part|
+          expect(part[:context]).to eq("module Outer > class Inner")
+        end
+      end
+    end
+
+    context "with large class methods" do
+      let(:content) do
+        lines = ["class MyClass"]
+        lines << "  def self.large_class_method"
+        200.times { |i| lines << "    puts 'line #{i}'" }
+        lines << "  end"
+        lines << "end"
+        lines.join("\n")
+      end
+
+      it "splits class methods correctly" do
+        chunks = chunker.chunk_file("class_method.rb", content)
+        method_parts = chunks.select { |c| c[:name] == "large_class_method" }
+
+        expect(method_parts.length).to eq(2)
+
+        method_parts.each do |part|
+          expect(part[:metadata][:class_method]).to be true
+          expect(part[:metadata][:is_partial]).to be true
+        end
+      end
+    end
+
+    context "realistic integration scenario" do
+      let(:realistic_content) do
+        <<~RUBY
+          module UserManagement
+            class UserService
+              def initialize(db)
+                @db = db
+              end
+
+              # This method handles the entire user registration process
+              def register_user(params)
+                # Validation phase (50 lines)
+                #{"validate_param(params)\n    " * 50}
+
+                # Creation phase (50 lines)
+                #{"create_user_record(params)\n    " * 50}
+
+                # Notification phase (50 lines)
+                #{"send_notifications(params)\n    " * 50}
+
+                # Return phase (50 lines)
+                #{"format_response\n    " * 50}
+              end
+
+              private
+
+              def validate_param(param)
+                # Short validation logic
+                param.present?
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "handles realistic Ruby code with large and small methods" do
+        chunks = chunker.chunk_file("user_service.rb", realistic_content)
+
+        # Should have module, class, and methods
+        expect(chunks.any? { |c| c[:type] == "module" }).to be true
+        expect(chunks.any? { |c| c[:type] == "class" }).to be true
+
+        # The large register_user method should be split
+        register_parts = chunks.select { |c| c[:name] == "register_user" }
+        expect(register_parts.length).to be > 1
+        expect(register_parts.all? { |p| p[:metadata][:is_partial] }).to be true
+
+        # Small methods should not be split
+        validate_parts = chunks.select { |c| c[:name] == "validate_param" }
+        expect(validate_parts.length).to eq(1)
+        expect(validate_parts[0][:metadata][:is_partial]).to be_nil
+
+        # Initialize should not be split
+        init_parts = chunks.select { |c| c[:name] == "initialize" }
+        expect(init_parts.length).to eq(1)
+      end
+    end
+  end
 end

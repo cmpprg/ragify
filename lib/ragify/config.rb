@@ -8,7 +8,8 @@ module Ragify
     DEFAULT_CONFIG = {
       "ollama_url" => "http://localhost:11434",
       "model" => "nomic-embed-text",
-      "chunk_size_limit" => 1000,
+      "chunk_size_limit" => 200,
+      "chunk_overlap" => 20,
       "search_result_limit" => 5,
       "ignore_patterns" => [
         "spec/**/*",
@@ -19,13 +20,14 @@ module Ragify
       ]
     }.freeze
 
-    attr_reader :ollama_url, :model, :chunk_size_limit, :search_result_limit, :ignore_patterns
+    attr_reader :ollama_url, :model, :chunk_size_limit, :chunk_overlap, :search_result_limit, :ignore_patterns
 
     def initialize(config_hash = {})
       merged = DEFAULT_CONFIG.merge(config_hash)
       @ollama_url = merged["ollama_url"]
       @model = merged["model"]
       @chunk_size_limit = merged["chunk_size_limit"]
+      @chunk_overlap = merged["chunk_overlap"]
       @search_result_limit = merged["search_result_limit"]
       @ignore_patterns = merged["ignore_patterns"]
     end
@@ -43,7 +45,11 @@ module Ragify
         model: nomic-embed-text
 
         # Maximum lines per code chunk
-        chunk_size_limit: 1000
+        chunk_size_limit: 200
+
+        # Lines of overlap between split chunks (for large methods)
+        # This helps maintain context across chunk boundaries
+        chunk_overlap: 20
 
         # Default number of search results
         search_result_limit: 5
@@ -77,6 +83,7 @@ module Ragify
         "ollama_url" => @ollama_url,
         "model" => @model,
         "chunk_size_limit" => @chunk_size_limit,
+        "chunk_overlap" => @chunk_overlap,
         "search_result_limit" => @search_result_limit,
         "ignore_patterns" => @ignore_patterns
       }
